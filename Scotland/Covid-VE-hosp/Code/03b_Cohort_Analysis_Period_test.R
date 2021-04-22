@@ -20,12 +20,12 @@ print(z_event_endpoint)
 print(table(df$event))
 print(table(df$vacc_status, exclude=NULL))
 
-z_combine_vacc_level <- TRUE  # to combine the first 1 or 2 levels of vacc_status with uv
+z_combine_vacc_level <- FALSE  # to combine the first 1 or 2 levels of vacc_status with uv
 output_list$combine_levels <- z_combine_vacc_level
 z_adjustment <- "full" #or "minimal" "full
 output_list$adjustment <- z_adjustment
-output_list$prop_score <- "inverse propensity weighting" 
-#"no propensity weighting"  "no propensity weighting"
+output_list$prop_score <- "no propensity weighting" 
+#"no propensity weighting"  "inverse propensity weighting"
 output_list$model <- "glm" 
 #"cox"  "glm"
 
@@ -36,7 +36,7 @@ rm(z_res)
 
 for (i in 1:nrow(data_selection_flags)) {
   
-  #i <- 1
+  #i <- 2
   
   
   z_df <- df
@@ -66,6 +66,15 @@ for (i in 1:nrow(data_selection_flags)) {
   
   z_df$n_tests_gp <- cut(z_df$n_tests, breaks = c(-1,0,1,2,3,9,100), labels=c("0","1","2","3","4-9","10+"))
   z_df$age_gp <- relevel(z_df$age_gp, ref="60-64")
+  #z_df$vacc_status <- relevel(z_df$vacc_status, ref="v1_7:13")
+  #drop to 10 controsl per case
+  #z_ids_case <- unique(filter(z_df, event==1)$EAVE_LINKNO)
+  #z_ids_cont <- unique(z_df$EAVE_LINKNO)
+  #z_ids_cont <- z_ids_cont[!(z_ids_cont %in% z_ids_case)]
+  #z_ids <- c(z_ids_case, sample(z_ids_cont, size=round(length(z_ids_cont)*0.20)) )
+  #z_df <- filter(z_df, EAVE_LINKNO %in% z_ids)
+  
+  
 #z.yr <- tcut(rep(0,nrow(analysis.df)), c(-1,seq(7,as.numeric(a.analysis.to-a.analysis.from),by=7) ))
 #aggregate for overall
 z.agg <- pyears(Surv(start,stop,event) ~ vacc_status, data=z_df , weight=weight, scale=365.25, data.frame=TRUE)

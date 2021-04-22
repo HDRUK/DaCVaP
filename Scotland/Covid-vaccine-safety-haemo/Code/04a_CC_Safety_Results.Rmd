@@ -1,0 +1,271 @@
+---
+title: "Covid-19 Vaccine Safety EAVE Cohort"
+author: "EAVE/PHS Study Group"
+date: ' `r format(Sys.Date(), "%d %B %Y")` '
+output: html_document
+---
+
+```{r setup, include=FALSE,echo = FALSE, warning=FALSE, error=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, error=FALSE)
+
+# 01 Setup ####
+#Libraries
+library(plyr)
+library(tidyverse)
+library(survival)
+#library(htmltools)
+#Load data
+
+Location <- "/conf/"  # Server
+#Location <- "//isdsf00d03/"  # Desktop
+project_path <- paste0(Location,"EAVE/GPanalysis/progs/CR/Vaccine_Safety")
+
+source(paste0(project_path,"/00_Functions.R"))
+
+upper_plot_limit <- 5
+lower_plot_limit <- 0.05
+
+z_endpoint_names <- c("throm_cvst","any_throm", "any_haem", "any_itp",  "itp_gen", "itp" )
+z_endpoint_title <- c("Thrombosis inc CVT SVT","Thrombosis excl CVT SVT",
+                      "Haemorrhage, excluding GI, GU",
+                      "Thrombocytopenia - ITP - General and Specific",
+                      "Thrombocytopenia - ITP - General",
+                      "ITP - Specific")
+
+#z_endpoint_names <- c("any_throm_haem", "any_throm", "any_haem" , "cereb_haem" ,"CVT_SVT", "itp", #"haem","cereb_haem","sub_arach_haem", "dv_throm","throm", "pv_throm", "pulm_emb" )
+#z_endpoint_title <- c("Any Thrombosis or Haemorrhage", "Any Thrombosis","Any Haemorrhage", 
+#                      "Cerebral Haemorrhage inc CVT SVT, ITP", "CVT SVT", "ITP",
+#  "Haemorrhage (F42/3. G8/y)", "Cerebral Haemorrhage (G61/2)",
+#                      "Sub Arachinoid Haemorrhage (G60)",
+#                      "Deep Vein Thrombosis (G801/02/0y/0z)","Thrombosis (G800)",
+#                      "Portal Vein Thrombosis (G81/2)",
+#                      "Pulmonary Embolism (G40)")
+
+
+```
+
+
+## Introduction
+
+This report gives the results of two sepearate investigations of safety issues with the covid 19 vaccinations in Scotland.  One is through and observed expected analysis where the rates of consultations post vaccination are compared to the rates in a historical period. The second is a concurrent case control study where individuals with an incident consultation event are matched with individuals without and then the vaccination status of both cases and controls determined.
+
+## Statistical Methods
+
+### Historical Control Period
+
+In the observed and expected analysis the incident cases in the post vaccination period are compared to those expected from a pre-vaccination period. The pre-vacciation period used is the number of incident events in the 28 day period from October 01, 2020. For an incident consultation there were no consultations for the event by the same individual in the period from September 2019.  In the post vacciantion period the consultations were linked to the vaccination records and incident cases post vaccination were counted for the observed duration of the post vaccination period.
+
+The tables are presented separately for vaccine type and age group.  The expected events are the number of events per day in the pre vacciantion period divided by the population and multiplied by the days at risk in the post vaccination period for all vaccinated and then summed.
+
+ Events - number of events; Expected - expected number of events.
+
+### Case Control Study
+
+Incident cases in the period 8th December to `r format(Sys.Date() - 7, "%d %B %Y")` are matched to controls based upon exact age (up to 80, 2 year ages groups to 90 and 5 year age bands above that), Gender and Intermediate Zone. (to be replaced by GP practice when available).  Up to 5 controls are selected per case.  For individuals with multiple events in the vaccination period the date fo the first event was used and subsequent events omitted.
+
+The statistical modelling uses conditional logistic regression where the case control groups are included as a strata term.  The unadjusted model has no other terms other than the strata;  There is a simple adjustment for number of co-morbid contitions that the patient has. These are derived from the QCovid risk groups and are recorded at December 2020.  Further adjustment includes terms for deprivation (SIMD in quintiles), and number of PCR tests the individual has had prior to December 08, 2021. 
+
+In the tables N is the number of individuals in the vaccine exposure group; Number Events is the number of individuals with an incident consultation in the post vacciantion period; Percent is the number of events divided by N and should be equal to 16.67% if there is no associated between vaccination and the event representing the 5:1 ratio of controsl to cases.  OR, LCL, UCL are the odds ratio and lower and upper 95% confidence intervals for the odds of being a case, while P is the p value associated with the interval.  If there is no association between the event and vaccination the confidence intervals are expected to span 1.
+
+The vaccination status has levels:  uv - unvaccinated; v1:0-6 - one dose of vacciation 0-6 days post vaccination; and so on to v1_28+_v2 representing those observed for 28+days post vaccination and those with 2 doses.  Few individuals had received 2 doses so this group is not investigated separately.
+
+##Results
+
+
+```{r table_1, , results='asis', include=TRUE, warning=FALSE, echo=FALSE}
+options(knitr.kable.NA = '')
+
+for (i in 1:length(z_endpoint_names)) { 
+  
+  #i <- 1
+  z_fname <- paste0("CR_cc_safety_",z_endpoint_names[i],".RDS")
+  results_list <- readRDS(paste0(project_path,"/output/temp/",z_fname))
+
+
+cat("\n##",z_endpoint_title[i], " \n") 
+
+z_text <- paste("There are", results_list$total_events, " events in the study period with ",
+  results_list$total_unique_events, "incident events.  The are", results_list$no_link_to_cohort,
+  "individuals who cannot be linked in to the EAVE-II cohort.  The number of individuals who
+  could not be matched in the case control study was", results_list$no_match,"." )
+cat("\n", z_text, "\n") 
+
+if ("oe_tab" %in% names(results_list)) {
+
+z <- fun_boot_obs_exp(results_list$oe_tab, n_sims=10000)
+
+z_res_data <- z$Data %>% dplyr::select(vacc_type, AgeGrp, N, event, Exp_Events,  data_oe, data_o_minus_e)%>% 
+  mutate(data_oe = if_else(is.na(data_oe),1,data_oe))
+z_res_ci <- z$Age_Group %>% dplyr::select(vacc_type, AgeGrp, q025_oe, q975_oe, q025_o_minus_e, q975_o_minus_e)
+z_res <- z_res_data %>% left_join(z_res_ci, by=c("vacc_type","AgeGrp")) %>% 
+  dplyr::relocate(data_o_minus_e, .after=q975_oe) 
+
+z_res_data <-   z_res_data %>% group_by(vacc_type) %>% 
+  dplyr::select(-AgeGrp) %>% 
+  dplyr::summarise(across(N:Exp_Events, ~sum(.x))) %>% 
+  mutate(AgeGrp="All Ages") %>% 
+  dplyr::relocate(AgeGrp, .after=vacc_type) %>% 
+  mutate(data_oe = event/Exp_Events, data_o_minus_e = event - Exp_Events)
+z_res_ci <- z$Overall %>% dplyr::select(vacc_type,  q025_oe, q975_oe, q025_o_minus_e, q975_o_minus_e)
+z_res_vt <- z_res_data %>% left_join(z_res_ci, by=c("vacc_type")) %>% 
+  dplyr::relocate(data_o_minus_e, .after=q975_oe) 
+
+
+z_res <- bind_rows(z_res, z_res_vt)
+
+
+z_tab <- kableExtra::kbl(z_res, 
+                caption = "Both Vaccines - Numbers, Expected Events, ratios, Differences and Bootstrap Confidence Intervals", 
+                digits=c(NA,NA, 0,0,1,2,2,2,2,2,2), 
+                col.names = c("Vacc","Age Group","Vaccinated","Events","Expected", "Ratio","LCL","UCL",
+                              "Difference", "LCL", "UCL") ) %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria", position = "left") %>%
+  kableExtra::column_spec(3:11, width="6em") %>% 
+  #kableExtra::column_spec(c(5,8), width="6em") %>% 
+  kableExtra::add_header_above(c(" " = 5, "O/E Ratio" = 3, "O - E" = 3))
+
+print(z_tab)
+
+
+
+
+}
+
+
+z_res <- results_list$estimates %>% dplyr::select(-group)
+#if the fully adjusted model does not fit the z_res$HR == z_res$HR_adj
+if (all(z_res$HR == z_res$HR_adj_1)) {
+  z_res <- z_res %>% mutate(HR= NA_real_ , LCL = NA_real_, UCL = NA_real_, P = NA_real_)
+}
+
+# Create a new field (OR_adj_CL), containing character strings for Odds Ratios with confidence intervals.
+# pasting strings made from numeric data, to form one larger string
+# This horrendous looking code translates to - add new field containing the string: "OR_adj (OR_LCL_adj - OR_UCL_adj)"
+
+z_res <- z_res %>% 
+  dplyr::mutate(HR_raw_CL = paste(sprintf("%.2f", HR_raw),
+                                  " (",
+                                  sprintf("%.2f", LCL_raw),
+                                  " - ",
+                                  sprintf("%.2f", UCL_raw),
+                                  ")"
+                                  )
+               ) %>% 
+  dplyr::mutate(HR_adj_1_CL = paste(sprintf("%.2f", HR_adj_1),
+                                  " (",
+                                  sprintf("%.2f", LCL_adj_1),
+                                  " - ",
+                                  sprintf("%.2f", UCL_adj_1),
+                                  ")"
+                                  )
+               ) %>% 
+    dplyr::mutate(HR_adj_2_CL = paste(sprintf("%.2f", HR),
+                                  " (",
+                                  sprintf("%.2f", LCL),
+                                  " - ",
+                                  sprintf("%.2f", UCL),
+                                  ")"
+                                  )
+               ) 
+               
+
+z_res <- z_res %>% dplyr::select(vs_type, N, R, Percent, HR_raw_CL, P_raw , 
+                                 HR_adj_1_CL, P_adj_1, HR_adj_2_CL, P)
+z_tab <- kableExtra::kbl(z_res, 
+                         caption = "Either Vaccine - Numbers and Odds Ratios", 
+                         digits=c(NA,0,0,1, rep(c(NA,4),3)), 
+                         col.names = c("Vaccine Group","N","Number Events","Percent",
+                                      "OR (95% CI)","P","OR (95% CI)","P","OR (95% CI)","P"),
+                         align='lrrrrrrrrrr') %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria", position = "left") %>%
+#  kableExtra::column_spec(2:3, width="6em") %>% 
+  kableExtra::column_spec(c(5,7,9), width="14em") %>% 
+  kableExtra::column_spec(c(6,8,10), width="5em") %>% 
+#  kableExtra::column_spec(c(8,12,16), width="5em") %>% 
+  kableExtra::add_header_above(c(" " = 4, "Unadjusted" = 2, "Number Risk Groups Only" = 2, "Adjusted" = 2))
+
+print(z_tab)
+
+
+  cat("  \n")
+  cat("  \n")
+  cat("  \n")
+  
+
+  z_res <- results_list$est_vt %>% dplyr::select(-group)
+    
+
+z_res <- z_res %>% 
+  dplyr::mutate(HR_raw_CL = paste(sprintf("%.2f", HR_raw),
+                                  " (",
+                                  sprintf("%.2f", LCL_raw),
+                                  " - ",
+                                  sprintf("%.2f", UCL_raw),
+                                  ")"
+                                  )
+               ) %>% 
+  dplyr::mutate(HR_adj_1_CL = paste(sprintf("%.2f", HR_adj_1),
+                                  " (",
+                                  sprintf("%.2f", LCL_adj_1),
+                                  " - ",
+                                  sprintf("%.2f", UCL_adj_1),
+                                  ")"
+                                  )
+               ) %>% 
+    dplyr::mutate(HR_adj_2_CL = paste(sprintf("%.2f", HR),
+                                  " (",
+                                  sprintf("%.2f", LCL),
+                                  " - ",
+                                  sprintf("%.2f", UCL),
+                                  ")"
+                                  )
+               ) 
+               
+
+z_res <- z_res %>% dplyr::select(vacc_type, N, R, Percent, HR_raw_CL, P_raw , 
+                                 HR_adj_1_CL, P_adj_1, HR_adj_2_CL, P)
+z_tab <- kableExtra::kbl(z_res, 
+                         caption = "Either Vaccine - Numbers and Odds Ratios", 
+                         digits=c(NA,0,0,1, rep(c(NA,4),3)), 
+                         col.names = c("Vaccine Group","N","Number Events","Percent",
+                                      "OR (95% CI)","P","OR (95% CI)","P","OR (95% CI)","P"),
+                         align='lrrrrrrrrrr') %>%
+  kableExtra::kable_classic(full_width = F, html_font = "Cambria", position = "left") %>%
+#  kableExtra::column_spec(2:3, width="6em") %>% 
+  kableExtra::column_spec(c(5,7,9), width="14em") %>% 
+  kableExtra::column_spec(c(6,8,10), width="5em") %>% 
+#  kableExtra::column_spec(c(8,12,16), width="5em") %>% 
+  kableExtra::add_header_above(c(" " = 4, "Unadjusted" = 2, "Number Risk Groups Only" = 2, "Adjusted" = 2))
+
+print(z_tab)
+
+  cat("  \n")
+  cat("  \n")
+  cat("  \n")
+  
+
+  
+  }
+
+```
+
+
+##EAVE-II
+
+We linked individual patient-level data from all primary, secondary, mortality and virological/serological testing data in Scotland. We used this national dataset to investigate the temporal progression of COVID-19 in the Scottish population and the development of COVID-19 morbidity and mortality in individuals. 
+
+###Study design
+
+Almost all the residents in Scotland (including children) are registered with primary care, which provides a comprehensive array of health-care services (free at the point of care), including the issuing of prescriptions for medications. Access to secondary care is typically through a general practitioner (GP) based within a primary care practice or via the emergency department (ED) or out-of-hours primary care services. During the acute phase of the pandemic, community based COVID-19 hubs (a GP-led service designed to segment patients and reduce the risk of nosocomial infections) were established. We used anonymised individual patient-level data from general practices, hospitals, death registry, and reverse-transcriptase polymerase chain reaction (RT-PCR) testing (including NHS and UK Government testing centre data) to investigate the changing dynamics of COVID-19 during 2020.
+
+We developed an open cohort drawn from patients registered with any primary care practice in Scotland from March 1st 2020. 
+
+###Datasets
+We used data from all 929 Scottish primary care practices. Clinical data collected by primary care in Scotland have consistently been shown to be of high quality (90% completeness and accuracy) and their value for epidemiologic research has been repeatedly demonstrated. These were linked to other datasets including the Electronic Communication of Surveillance in Scotland ECOSS (all virology testing national database), the Scottish Morbidity Record (hospitalisation including ICU stay), and National Records Scotland (death certification).
+
+
+### Funding
+
+EAVE II is funded by the Medical Research Council and the National Institute for Health Research Health Technology Assessment Programme, with the support of BREATHE – The Health Data Research Hub for Respiratory Health, funded through the UK Research and Innovation Industrial Strategy Challenge Fund and delivered through Health Data Research UK. Additional support through the Scottish Government Director General Health and Social Care
+
+
