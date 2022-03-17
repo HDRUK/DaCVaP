@@ -45,7 +45,3 @@ This research is part of the Data and Connectivity National Core Study, led by H
 ## How to cite this work
 
 The work is under peer-review please get in touch for further details and collaboration: fatemeh.torabi@swansea.ac.uk
-
-
-
-The North East-Newcastle and North Tyneside 2 research ethics committee provided ethical approval for the CVD-COVID-UK/COVID-IMPACT research programme (REC No 20/NE/0161). In Wales, the work has been approved by SAIL Databank Information Governance Panel under project number WMCC. 
