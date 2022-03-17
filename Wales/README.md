@@ -10,8 +10,8 @@ This project was conducted in the Trusted Research Envirnment of Wales known as 
 * [Interested to replicate our figure](https://github.com/HDRUK/DaCVaP/tree/main/Wales/Figure%202)
 * [Interested in our data curation and cohort generation see 02a to 04c codes of analysis pipeline](https://github.com/HDRUK/DaCVaP/tree/main/Wales)
 * [Interested in pulling data out of database server and data cleaning stage](https://github.com/HDRUK/DaCVaP/blob/main/Wales/06b_tidy.r)
-* [Interested in our modelling approach] (https://github.com/HDRUK/DaCVaP/blob/main/Wales/08b_sccs_model_fit_collapse_controls.rmd)
-* [Interested in our code for generating Table1] (https://github.com/HDRUK/DaCVaP/blob/main/Wales/08c_TableOne.rmd)
+* [Interested in our modelling approach](https://github.com/HDRUK/DaCVaP/blob/main/Wales/08b_sccs_model_fit_collapse_controls.rmd)
+* [Interested in our code for generating Table1](https://github.com/HDRUK/DaCVaP/blob/main/Wales/08c_TableOne.rmd)
 
 
 ## Authorship Team
