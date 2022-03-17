@@ -1,0 +1,4453 @@
+---
+title: "Self-controlled case series analysis"
+author: '[Fatemeh Torabi](mailto:fatemeh.torabi@swansea.ac.uk)'
+date: "Last edited `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+    code_folding: hide
+  word_document:
+    toc: yes
+    toc_depth: '2'
+toc-title: Contents
+always_allow_html: yes
+header-includes: null
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(fig.path = 'figures/', fig.align = 'center', echo = FALSE, warning = FALSE, message = FALSE)
+
+pkgs <- c(
+    "assertr",
+    "beepr",
+    "broom",
+    "dplyr",
+    "data.table",
+    "dtplyr",
+    "forcats",
+    "ggplot2",
+    "ggthemes",
+    "knitr",
+    "kableExtra",
+    "mice",
+    "janitor",
+    "lubridate",
+    "qs",
+    "rmarkdown",
+    "sailr",
+    "scales",
+    "stringr",
+    "readr",
+    "survival",
+    "tableone",
+    "tidyr",
+    "RODBC",
+    "Cairo",
+    "lattice",
+    "getopt"
+)
+
+for (pkg in pkgs) {
+    suppressWarnings(
+        suppressPackageStartupMessages(
+            library(pkg, character.only = TRUE)
+        )
+    )
+    message("\t", pkg, sep = "")
+}
+```
+
+```{r "loginSctn", eval=TRUE, echo = FALSE }
+source("S:/0911 - Utilising routine data and machine learning techniques to discover new multi/FT/R_login/login_box.r");
+login = getLogin('torabif');
+sql = odbcConnect('PR_SAIL',login[1],login[2]);
+login = 0
+```
+<!-------------------------------------------------------------------------------------------->
+\newpage
+\tableofcontents
+\newpage
+
+## Introduction
+
+The self-controlled case series (sccs) analysis compares risk of outcome events for the same individual in pre- and post- exposure. We start the followup period from 15 days prior to the 7th of December 2020 (official start of vaccination in Wales).  For each case if they are vaccinated their first vaccination date defines the time of exposure. We considered the time period from the date of firs vaccination dose to 28 days after as the risk (exposed) period. The control (pre-risk) period is the 15 days period before 14 days before vaccination (that is, 15-29 days before vaccine receipt), allowing for a 14 days clearance period. The main comparisons were the rate of adverse events between the risk period and the pre-risk period and the clearance period and the pre-risk period. 
+
+
+*Table 2 * - Self-controlled case series analysis among vaccinated individuals with the event post-vaccination risk period compared to the pre-vaccination not at-risk period in the population of Wales. (Wales replica of supplementary Table 3)
+
+
+```{r , eval=TRUE, echo=FALSE}
+#df_sccs <- qread("P:/torabif/workspace/vac19-vaccine-safety-replication/data/d2_sccs_analysis_clean.qs")
+m <- list()
+
+frml = event ~ expgr + strata(alf_e) + offset(log(intervals))
+
+fit_clogits <- function(m, frml) {
+  suffix <- str_replace(deparse(substitute(frml)), "frml", "")
+
+  m[[str_c("AZ", suffix)]] <- clogit(
+    formula = frml,
+    data = sub.sccs,
+    subset = vacc_type == "AZ"
+  )
+
+  m[[str_c("PB", suffix)]] <- clogit(
+    formula = frml,
+    data = sub.sccs,
+    subset = vacc_type == "PB"
+  )
+
+  return(m)
+}
+
+#scattered intervals ending at exact event date
+sccs <- sqlQuery(sql,"
+SELECT a.* , 
+a.vt|| '/'  || a.age_band || '/' || a.expgr AS vt_age,
+a.vt|| '/'  || a.wimd_2019_quintile || '/' || a.expgr AS vt_wimd, 
+days(tstop) - days(tstart) INTERVALs , 
+CASE 
+WHEN vt = 'UV' THEN expgr 
+ELSE vt || expgr 
+END AS vt_expgr
+FROM (
+	SELECT DISTINCT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+	TSTART ,
+	CASE 
+	WHEN event=0 THEN TSTOP 
+	WHEN event=1 THEN INCIDENT_sccs_DT END AS tstop, 
+	CASE 
+	WHEN  expgr= '1-PRE_VAC' 					THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '4-POST_First_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+	ELSE expgr END AS expgr,
+	CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type
+ , vt, event ,event_cat, INCIDENT_sccs_DT 
+	FROM sailw0911v.vac17_analysis_SCCS_RIB
+	ORDER BY ALF_E , TSTART
+) a
+");
+
+library(data.table)
+setnames(sccs, tolower(names(sccs[1:ncol(sccs)])))
+
+sccs <- sccs %>% 
+  mutate(expgr=factor(expgr, levels=c(
+    "1-BASELINE_CONTROL",
+    "2-CLEARANCE_FIRST",
+    "3a-RISK_FIRST 1-7D",
+    "3b-RISK_FIRST 8-14D",
+    "3c-RISK_FIRST 15-21D",
+    "3d-RISK_FIRST 22-28D",
+    "5-CLEARANCE_SECOND",
+    "6a-RISK_SECOND 1-7D",
+    "6b-RISK_SECOND 8-14D",
+    "6c-RISK_SECOND 15-21D",
+    "6d-RISK_SECOND 22-28D",
+    "8-CLEARANCE_THIRD",
+    "9a-RISK_third 1-7D	",
+    "9b-RISK_third 8-14D",	
+    "9c-RISK_third 15-21D",
+    "9d-RISK_third 22-28D",
+    "11-CLEARANCE_BOOSTER",
+    "12a-RISK_BOOSTER 1-7D",
+    "12b-RISK_BOOSTER 8-14D",
+    "12c-RISK_BOOSTER 15-21D",	
+    "12d-RISK_BOOSTER 22-28D"
+)))
+#View(sccs)
+sccs$intervals[sccs$intervals==0]<- 1;
+
+
+```
+
+
+
+# Idiopathic thrombocytopenic purpura
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(N) AS N, event_type FROM (
+
+SELECT DISTINCT 	CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type ,
+CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'Idiopathic thrombocytopenic purpura' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Idiopathic thrombocytopenic purpura' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  AND 	VACC_TYPE <> 'MD'
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY vacc_type, expgr;
+");
+
+#ITP
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Idiopathic thrombocytopenic purpura")%>%                    
+                    dplyr::select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Idiopathic thrombocytopenic purpura") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Idiopathic thrombocytopenic purpura") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Idiopathic thrombocytopenic purpura") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+ITP<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(ITP, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ITP %>%
+  arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_itp.csv")
+
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+```
+
+
+# Thrombocytopenia (excluding ITP)
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr  , CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.vac17_analysis_SCCS_RIB
+		ORDER BY ALF_E , TSTART
+) WHERE EVENT_CAT = 'Thrombocytopenia (excluding ITP)'
+GROUP BY VACC_TYPE,EXPGR 
+");
+
+#events <- format(events,big.mark=',')
+
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##Thrombocytopenia
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Thrombocytopenia (excluding ITP)")%>%                      dplyr::select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE == "PB") %>% 
+  mutate(vc="PB",
+         EVENT="Thrombocytopenia (excluding ITP)") %>% 
+    dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Thrombocytopenia (excluding ITP)") %>% 
+    dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Thrombocytopenia (excluding ITP)") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+THR<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(THR, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+THR %>%
+    arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_thrombcp.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+```
+
+
+# Hemorrhagic events
+
+
+```{r , eval=TRUE, echo=FALSE}
+###########################
+events <- sqlQuery(sql,"SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+	SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , 
+	CASE 
+	WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+	WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+  WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+	ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'Hemorrhagic events' AS event_type
+	FROM (
+		SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+		WHERE 
+		alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Hemorrhagic events' AND event=1)
+		ORDER BY ALF_E , TSTART 
+		)
+	WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+	GROUP BY VACC_TYPE , EXPGR
+	ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+##Hemorrhagic events
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Hemorrhagic events")%>%
+                    dplyr::select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Hemorrhagic events") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Hemorrhagic events") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Hemorrhagic events") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+HEM<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(HEM, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+HEM %>%
+    arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_HEM.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+```
+
+
+# Venous thromboembolic events (excluding CSVT)
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'Venous thromboembolic events (excluding CSVT)' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Venous thromboembolic events (excluding CSVT)' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##Venous thromboembolic events (excluding CSVT
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Venous thromboembolic events (excluding CSVT)")%>%          
+                    dplyr::select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+#new[,-1] <- round(new[, -1],2)
+
+##counts 
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Venous thromboembolic events (excluding CSVT)") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="PB",
+         EVENT="Venous thromboembolic events (excluding CSVT)") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Venous thromboembolic events (excluding CSVT)") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+VTE<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(VTE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+VTE %>%
+    arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_VTE.csv")
+
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+```
+
+
+# Atrial Thrombosis
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'Atrial Thrombosis' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Arterial Thrombosis' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##Atrial Thrombosis
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Arterial Thrombosis")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+#table(sub.sccs$expgr)
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Atrial Thrombosis") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Atrial Thrombosis") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Atrial Thrombosis") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+AT<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(AT, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+AT %>%
+    arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_AT.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+
+```
+
+
+# Cerebral Venous Sinus Thrombosis (CVST)
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'CVST' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'CSVT' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##CVST
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "CSVT")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="CSVT")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="CSVT")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="CSVT") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+CSVT<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(CSVT, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+CSVT %>%
+    arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_CSVT.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+
+```
+
+
+# Myocardial Infarction
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr 
+, COUNT(DISTINCT ALF_E ) N, 'Myocardial Infarction' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Myocardial Infarction' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##Atrial Thrombosis
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Myocardial Infarction")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Myocardial Infarction")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Myocardial Infarction")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Myocardial Infarction") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+MI<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(MI, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+MI %>%
+      arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_MI.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+
+#################
+#PB age
+##################
+```
+
+
+# Ischeamic Stroke
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT  CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr 
+, COUNT(DISTINCT ALF_E ) N, 'Ischeamic Stroke' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Ischeamic Stroke' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Ischeamic Stroke")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Ischeamic Stroke") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Ischeamic Stroke") %>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Ischeamic Stroke") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+ST<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(ST, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ST %>%
+      arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_ST.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+
+################################################################
+#model by age
+################################################################
+
+```
+
+# Negative CONTROL: Hip fracture
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT  CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr 
+, COUNT(DISTINCT ALF_E ) N, 'HIP' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Hip fracture' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL AND VACC_TYPE <> 'MD' 
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##coeliac 
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Hip fracture")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Hip fracture")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Hip fracture")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Hip fracture") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+HIP<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(HIP, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+HIP %>%
+      arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_hipfract.csv")
+```
+
+
+# POSITIVE CONTROL: Anaphylaxis
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+
+events <- sqlQuery(sql,"
+
+SELECT DISTINCT vacc_type, expgr, sum(n) AS N, event_type FROM
+(
+SELECT DISTINCT CASE 
+	WHEN  expgr= '11-CLEARANCE_BOOSTER' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12a-RISK_BOOSTER 1-7D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12b-RISK_BOOSTER 8-14D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12c-RISK_BOOSTER 15-21D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	WHEN  expgr= '12d-RISK_BOOSTER 22-28D' 		AND vacc_type IN ('MD','MD_HALF')	THEN 'BOOSTER'
+	ELSE vacc_type END AS vacc_type  , CASE 
+WHEN  expgr= '1-PRE_VAC' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '4-POST_First_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '7-POST_SECOND_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '10-POST_THIRD_VACC_CONTROL' 	THEN '1-BASELINE_CONTROL'
+WHEN  expgr= '13-POST_BOOSTER_VACC_CONTROL' THEN '1-BASELINE_CONTROL'
+ELSE expgr END AS expgr , COUNT(DISTINCT ALF_E ) N, 'anaph' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.vac17_analysis_SCCS_RIB 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.vac17_analysis_SCCS_RIB WHERE EVENT_CAT = 'Anaphylactic shock' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY VACC_TYPE , EXPGR
+ORDER BY expgr
+)GROUP BY VACC_TYPE , EXPGR;
+");
+
+#events <- format(events,big.mark=',')
+#kable(events, col.names = c("Vaccine type", "Exposure window", "Total number of events", "Event type"), align = "ll")%>%
+#  kable_paper("hover", full_width=F)
+
+##coeliac 
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Anaphylactic shock")%>%          
+                    select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+#model----------------------------------------------------------
+
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("PB"))
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  filter(VACC_TYPE=="PB") %>% 
+  mutate(vc="PB",
+         EVENT="Anaph")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+PB<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+################################################################
+#model AZ
+################################################################
+#cat("ChAdOxl (Oxford-AstraZeneca) vaccine")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+az <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("AZ"))
+#az<-summary(az)
+az <- tidy(az, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+az$term<-az$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(az,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="AZ") %>% 
+  mutate(vc="AZ",
+         EVENT="Anaph")%>% 
+  select(EXPGR,N, VACC_TYPE,EVENT)
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+AZ<-left_join(CNT,new,by='term')%>%
+  select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+
+################################################################
+#model booster
+################################################################
+bst <- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs, subset = vacc_type %in% c("BOOSTER"))
+#az<-summary(az)
+bst <- tidy(bst, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+bst$term<-bst$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-BASELINE_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(bst,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+
+CNT <- events%>%
+  filter(VACC_TYPE=="BOOSTER") %>% 
+  mutate(vc="BOOSTER",
+         EVENT="Anaph") %>% 
+  dplyr::select(EXPGR,N, VACC_TYPE,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","VC","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+
+BOOSTER<-left_join(CNT,new,by='term')%>%
+  dplyr::select(event,VC,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+ANAPH<-rbind(AZ,PB,BOOSTER) %>% 
+  arrange()
+
+kable(ANAPH, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ANAPH %>%
+      arrange(VC, term) %>% 
+write_csv(file = "results/sccs_coef_anaph.csv")
+```
+
+# Model for those who had tested positive for COVID-19
+
+
+```{r , eval=TRUE, echo=FALSE}
+#scattered intervals ending at exact event date
+sccs <- sqlQuery(sql,"
+
+SELECT DISTINCT a.* , 
+a.vt|| '/'  || a.age_band || '/' || a.expgr AS vt_age,
+a.vt|| '/'  || a.wimd_2019_quintile || '/' || a.expgr AS vt_wimd, 
+days(tstop) - days(tstart) INTERVALs , 
+CASE 
+WHEN vt = 'UV' THEN expgr 
+ELSE vt || expgr 
+END AS vt_expgr
+FROM (
+	SELECT DISTINCT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+	TSTART ,
+	CASE 
+	WHEN event=0 THEN TSTOP 
+	WHEN event=1 THEN incident_sccs_DT END AS tstop, 
+	EXPGR , vacc_TYPE, vt, event ,event_cat, incident_sccs_DT 
+ 	FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+--	WHERE ALF_E =1001025668
+	ORDER BY ALF_E , TSTART
+) a
+ORDER BY a.alf_e;
+");
+
+setnames(sccs, tolower(names(sccs[1:ncol(sccs)])))
+sccs$intervals[sccs$intervals==0] <- 1;
+#sccs$intervals[sccs$intervals < 0] <- 0;
+sccs$intervals <- as.numeric(sccs$intervals)
+library(data.table)
+
+sccs <- sccs %>% 
+  mutate(expgr=factor(expgr, levels=c(
+  "1-PRE_TEST_CONTROL",
+  "2-TEST_RISK_PERIOD",
+  "3-POST_TEST_CONTROL"
+)))
+#View(sccs)
+
+```
+
+
+# Idiopathic thrombocytopenic purpura
+ EVENT_CAT = 'Idiopathic thrombocytopenic purpura' AND event=1)
+
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, count(DISTINCT ALF_E) N, 'Idiopathic thrombocytopenic purpura' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Idiopathic thrombocytopenic purpura' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+#ITP
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Idiopathic thrombocytopenic purpura")%>%                      select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+table(sccs$event)
+################################################################
+#model PB
+################################################################
+#cat("BNT162b2 mRNA (Pfizer-BioNTech) vaccine")
+#PB model
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+#model summary
+#pb<-summary(pb)
+#in a data frame
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "1-PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Idiopathic thrombocytopenic purpura") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+ITP<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+ITP$estimate  <- as.numeric(ITP$estimate)
+ITP$std.error <- as.numeric(ITP$std.error)
+ITP$statistic <- as.numeric(ITP$statistic)
+ITP$p.value   <- as.numeric(ITP$p.value)
+ITP$conf.low  <- as.numeric(ITP$conf.low)
+ITP$conf.high <- as.numeric(ITP$conf.high)
+ITP[,-c(1:3)] <- round(ITP[, -c(1:3)],2)
+
+
+kable(ITP, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ITP %>%
+write_csv(file = "results/sccs_coef_pos_itp.csv")
+
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Idiopathic thrombocytopenic purpura'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Idiopathic thrombocytopenic purpura")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+ITP.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+ITP.W$estimate  <- as.numeric(ITP.W$estimate)
+ITP.W$std.error <- as.numeric(ITP.W$std.error)
+ITP.W$statistic <- as.numeric(ITP.W$statistic)
+ITP.W$p.value   <- as.numeric(ITP.W$p.value)
+ITP.W$conf.low  <- as.numeric(ITP.W$conf.low)
+ITP.W$conf.high <- as.numeric(ITP.W$conf.high)
+ITP.W[,-c(1:3)] <- round(ITP.W[, -c(1:3)],2)
+
+kable(ITP.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ITP.W %>%
+write_csv(file = "results/sccs_coef_pos_itp_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Idiopathic thrombocytopenic purpura'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Idiopathic thrombocytopenic purpura")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+ITP.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+ITP.AGE$estimate  <- as.numeric(ITP.AGE$estimate)
+ITP.AGE$std.error <- as.numeric(ITP.AGE$std.error)
+ITP.AGE$statistic <- as.numeric(ITP.AGE$statistic)
+ITP.AGE$p.value   <- as.numeric(ITP.AGE$p.value)
+ITP.AGE$conf.low  <- as.numeric(ITP.AGE$conf.low)
+ITP.AGE$conf.high <- as.numeric(ITP.AGE$conf.high)
+ITP.AGE[,-c(1:4)] <- round(ITP.AGE[, -c(1:4)],2)
+
+kable(ITP.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ITP.AGE %>%
+write_csv(file = "results/sccs_coef_pos_itp_by_age.csv")
+```
+
+
+#  Thrombocytopenia (excluding ITP)
+ EVENT_CAT = 'Thrombocytopenia (excluding ITP)'
+ 
+ 
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, count(DISTINCT ALF_E) N, 'Thrombocytopenia (excluding ITP)' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Thrombocytopenia (excluding ITP)' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Thrombocytopenia (excluding ITP)")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Thrombocytopenia (excluding ITP)") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+THR<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+THR$estimate  <- as.numeric(THR$estimate)
+THR$std.error <- as.numeric(THR$std.error)
+THR$statistic <- as.numeric(THR$statistic)
+THR$p.value   <- as.numeric(THR$p.value)
+THR$conf.low  <- as.numeric(THR$conf.low)
+THR$conf.high <- as.numeric(THR$conf.high)
+THR[,-c(1:3)] <- round(THR[, -c(1:3)],2)
+
+
+kable(THR, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+THR %>%
+write_csv(file = "results/sccs_coef_pos_THR.csv")
+
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Thrombocytopenia (excluding ITP)'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Thrombocytopenia (excluding ITP)")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+THR.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+THR.W$estimate  <- as.numeric(THR.W$estimate)
+THR.W$std.error <- as.numeric(THR.W$std.error)
+THR.W$statistic <- as.numeric(THR.W$statistic)
+THR.W$p.value   <- as.numeric(THR.W$p.value)
+THR.W$conf.low  <- as.numeric(THR.W$conf.low)
+THR.W$conf.high <- as.numeric(THR.W$conf.high)
+THR.W[,-c(1:3)] <- round(THR.W[, -c(1:3)],2)
+
+kable(THR.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+THR.W %>%
+write_csv(file = "results/sccs_coef_POS_THR_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Thrombocytopenia (excluding ITP)'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE , exponentiate=TRUE)%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Thrombocytopenia (excluding ITP)")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+THR.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+THR.AGE$estimate  <- as.numeric(THR.AGE$estimate)
+THR.AGE$std.error <- as.numeric(THR.AGE$std.error)
+THR.AGE$statistic <- as.numeric(THR.AGE$statistic)
+THR.AGE$p.value   <- as.numeric(THR.AGE$p.value)
+THR.AGE$conf.low  <- as.numeric(THR.AGE$conf.low)
+THR.AGE$conf.high <- as.numeric(THR.AGE$conf.high)
+THR.AGE[,-c(1:4)] <- round(THR.AGE[, -c(1:4)],2)
+
+kable(THR.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+THR.AGE %>%
+write_csv(file = "results/sccs_coef_POS_THR_by_age.csv")
+```
+
+
+# Hemorrhagic events
+ EVENT_CAT = 'Hemorrhagic events' 
+
+ 
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, count(DISTINCT ALF_E) N, 'Hemorrhagic events' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Hemorrhagic events' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Hemorrhagic events")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Hemorrhagic events") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+HEM<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+HEM$estimate  <- as.numeric(HEM$estimate)
+HEM$std.error <- as.numeric(HEM$std.error)
+HEM$statistic <- as.numeric(HEM$statistic)
+HEM$p.value   <- as.numeric(HEM$p.value)
+HEM$conf.low  <- as.numeric(HEM$conf.low)
+HEM$conf.high <- as.numeric(HEM$conf.high)
+HEM[,-c(1:3)] <- round(HEM[, -c(1:3)],2)
+
+
+kable(HEM, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+HEM %>%
+write_csv(file = "results/sccs_coef_pos_HEM.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Hemorrhagic events'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Hemorrhagic events")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+HEM.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+HEM.W$estimate  <- as.numeric(HEM.W$estimate)
+HEM.W$std.error <- as.numeric(HEM.W$std.error)
+HEM.W$statistic <- as.numeric(HEM.W$statistic)
+HEM.W$p.value   <- as.numeric(HEM.W$p.value)
+HEM.W$conf.low  <- as.numeric(HEM.W$conf.low)
+HEM.W$conf.high <- as.numeric(HEM.W$conf.high)
+HEM.W[,-c(1:3)] <- round(HEM.W[, -c(1:3)],2)
+
+kable(HEM.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+HEM.W %>%
+write_csv(file = "results/sccs_coef_POS_HEM_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Hemorrhagic events'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Hemorrhagic events")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+HEM.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+HEM.AGE$estimate  <- as.numeric(HEM.AGE$estimate)
+HEM.AGE$std.error <- as.numeric(HEM.AGE$std.error)
+HEM.AGE$statistic <- as.numeric(HEM.AGE$statistic)
+HEM.AGE$p.value   <- as.numeric(HEM.AGE$p.value)
+HEM.AGE$conf.low  <- as.numeric(HEM.AGE$conf.low)
+HEM.AGE$conf.high <- as.numeric(HEM.AGE$conf.high)
+HEM.AGE[,-c(1:4)] <- round(HEM.AGE[, -c(1:4)],2)
+
+kable(HEM.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+HEM.AGE %>%
+write_csv(file = "results/sccs_coef_POS_HEM_by_age.csv")
+```
+ 
+# Venous thromboembolic events (excluding CSVT)
+ EVENT_CAT = 'Venous thromboembolic events (excluding CSVT)' 
+ 
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, count(DISTINCT ALF_E) N, 'Venous thromboembolic events (excluding CSVT)' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Venous thromboembolic events (excluding CSVT)' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Venous thromboembolic events (excluding CSVT)")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Venous thromboembolic events (excluding CSVT)") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+VTE<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+VTE$estimate  <- as.numeric(VTE$estimate)
+VTE$std.error <- as.numeric(VTE$std.error)
+VTE$statistic <- as.numeric(VTE$statistic)
+VTE$p.value   <- as.numeric(VTE$p.value)
+VTE$conf.low  <- as.numeric(VTE$conf.low)
+VTE$conf.high <- as.numeric(VTE$conf.high)
+VTE[,-c(1:3)] <- round(VTE[, -c(1:3)],2)
+
+
+kable(VTE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+VTE %>%
+write_csv(file = "results/sccs_coef_pos_VTE.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Venous thromboembolic events (excluding CSVT)'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Venous thromboembolic events (excluding CSVT)")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+VTE.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+VTE.W$estimate  <- as.numeric(VTE.W$estimate)
+VTE.W$std.error <- as.numeric(VTE.W$std.error)
+VTE.W$statistic <- as.numeric(VTE.W$statistic)
+VTE.W$p.value   <- as.numeric(VTE.W$p.value)
+VTE.W$conf.low  <- as.numeric(VTE.W$conf.low)
+VTE.W$conf.high <- as.numeric(VTE.W$conf.high)
+VTE.W[,-c(1:3)] <- round(VTE.W[, -c(1:3)],2)
+
+kable(VTE.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+VTE.W %>%
+write_csv(file = "results/sccs_coef_POS_VTE_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Venous thromboembolic events (excluding CSVT)'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Venous thromboembolic events (excluding CSVT)")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+VTE.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+VTE.AGE$estimate  <- as.numeric(VTE.AGE$estimate)
+VTE.AGE$std.error <- as.numeric(VTE.AGE$std.error)
+VTE.AGE$statistic <- as.numeric(VTE.AGE$statistic)
+VTE.AGE$p.value   <- as.numeric(VTE.AGE$p.value)
+VTE.AGE$conf.low  <- as.numeric(VTE.AGE$conf.low)
+VTE.AGE$conf.high <- as.numeric(VTE.AGE$conf.high)
+VTE.AGE[,-c(1:4)] <- round(VTE.AGE[, -c(1:4)],2)
+
+kable(VTE.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+VTE.AGE %>%
+write_csv(file = "results/sccs_coef_POS_VTE_by_age.csv")
+```
+ 
+# Atrial Thrombosis
+ EVENT_CAT = 'Arterial Thrombosis' 
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Arterial Thrombosis' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Arterial Thrombosis' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Arterial Thrombosis")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Arterial Thrombosis") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+AT<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+AT$estimate  <- as.numeric(AT$estimate)
+AT$std.error <- as.numeric(AT$std.error)
+AT$statistic <- as.numeric(AT$statistic)
+AT$p.value   <- as.numeric(AT$p.value)
+AT$conf.low  <- as.numeric(AT$conf.low)
+AT$conf.high <- as.numeric(AT$conf.high)
+AT[,-c(1:3)] <- round(AT[, -c(1:3)],2)
+
+
+kable(AT, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+AT %>%
+write_csv(file = "results/sccs_coef_pos_AT.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Arterial Thrombosis'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Arterial Thrombosis")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+AT.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+AT.W$estimate  <- as.numeric(AT.W$estimate)
+AT.W$std.error <- as.numeric(AT.W$std.error)
+AT.W$statistic <- as.numeric(AT.W$statistic)
+AT.W$p.value   <- as.numeric(AT.W$p.value)
+AT.W$conf.low  <- as.numeric(AT.W$conf.low)
+AT.W$conf.high <- as.numeric(AT.W$conf.high)
+AT.W[,-c(1:3)] <- round(AT.W[, -c(1:3)],2)
+
+kable(AT.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+AT.W %>%
+write_csv(file = "results/sccs_coef_POS_AT_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Arterial Thrombosis'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE , exponentiate=TRUE)%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Arterial Thrombosis")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+AT.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+AT.AGE$estimate  <- as.numeric(AT.AGE$estimate)
+AT.AGE$std.error <- as.numeric(AT.AGE$std.error)
+AT.AGE$statistic <- as.numeric(AT.AGE$statistic)
+AT.AGE$p.value   <- as.numeric(AT.AGE$p.value)
+AT.AGE$conf.low  <- as.numeric(AT.AGE$conf.low)
+AT.AGE$conf.high <- as.numeric(AT.AGE$conf.high)
+AT.AGE[,-c(1:4)] <- round(AT.AGE[, -c(1:4)],2)
+
+kable(AT.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+AT.AGE %>%
+write_csv(file = "results/sccs_coef_POS_AT_by_age.csv")
+```
+ 
+# Cerebral Venous Sinus Thrombosis (CVST)
+ EVENT_CAT = 'CSVT' 
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'CSVT' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'CSVT' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "CSVT")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="CSVT") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+CSVT<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+CSVT$estimate  <- as.numeric(CSVT$estimate)
+CSVT$std.error <- as.numeric(CSVT$std.error)
+CSVT$statistic <- as.numeric(CSVT$statistic)
+CSVT$p.value   <- as.numeric(CSVT$p.value)
+CSVT$conf.low  <- as.numeric(CSVT$conf.low)
+CSVT$conf.high <- as.numeric(CSVT$conf.high)
+CSVT[,-c(1:3)] <- round(CSVT[, -c(1:3)],2)
+
+
+kable(CSVT, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+CSVT %>%
+write_csv(file = "results/sccs_coef_pos_CSVT.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'CSVT'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="CSVT")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+CSVT.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+CSVT.W$estimate  <- as.numeric(CSVT.W$estimate)
+CSVT.W$std.error <- as.numeric(CSVT.W$std.error)
+CSVT.W$statistic <- as.numeric(CSVT.W$statistic)
+CSVT.W$p.value   <- as.numeric(CSVT.W$p.value)
+CSVT.W$conf.low  <- as.numeric(CSVT.W$conf.low)
+CSVT.W$conf.high <- as.numeric(CSVT.W$conf.high)
+CSVT.W[,-c(1:3)] <- round(CSVT.W[, -c(1:3)],2)
+
+kable(CSVT.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+CSVT.W %>%
+write_csv(file = "results/sccs_coef_POS_CSVT_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'CSVT'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="CSVT")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+CSVT.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+CSVT.AGE$estimate  <- as.numeric(CSVT.AGE$estimate)
+CSVT.AGE$std.error <- as.numeric(CSVT.AGE$std.error)
+CSVT.AGE$statistic <- as.numeric(CSVT.AGE$statistic)
+CSVT.AGE$p.value   <- as.numeric(CSVT.AGE$p.value)
+CSVT.AGE$conf.low  <- as.numeric(CSVT.AGE$conf.low)
+CSVT.AGE$conf.high <- as.numeric(CSVT.AGE$conf.high)
+CSVT.AGE[,-c(1:4)] <- round(CSVT.AGE[, -c(1:4)],2)
+
+kable(CSVT.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+CSVT.AGE %>%
+write_csv(file = "results/sccs_coef_POS_CSVT_by_age.csv")
+```
+ 
+# Myocardial Infarction
+ EVENT_CAT = 'Myocardial Infarction' 
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Myocardial Infarction' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Myocardial Infarction' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Myocardial Infarction")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Myocardial Infarction") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+MI<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+MI$estimate  <- as.numeric(MI$estimate)
+MI$std.error <- as.numeric(MI$std.error)
+MI$statistic <- as.numeric(MI$statistic)
+MI$p.value   <- as.numeric(MI$p.value)
+MI$conf.low  <- as.numeric(MI$conf.low)
+MI$conf.high <- as.numeric(MI$conf.high)
+MI[,-c(1:3)] <- round(MI[, -c(1:3)],2)
+
+
+kable(MI, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+MI %>%
+write_csv(file = "results/sccs_coef_pos_MI.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Myocardial Infarction'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Myocardial Infarction")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+MI.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+MI.W$estimate  <- as.numeric(MI.W$estimate)
+MI.W$std.error <- as.numeric(MI.W$std.error)
+MI.W$statistic <- as.numeric(MI.W$statistic)
+MI.W$p.value   <- as.numeric(MI.W$p.value)
+MI.W$conf.low  <- as.numeric(MI.W$conf.low)
+MI.W$conf.high <- as.numeric(MI.W$conf.high)
+MI.W[,-c(1:3)] <- round(MI.W[, -c(1:3)],2)
+
+kable(MI.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+MI.W %>%
+write_csv(file = "results/sccs_coef_POS_MI_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Myocardial Infarction'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Myocardial Infarction")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+MI.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+MI.AGE$estimate  <- as.numeric(MI.AGE$estimate)
+MI.AGE$std.error <- as.numeric(MI.AGE$std.error)
+MI.AGE$statistic <- as.numeric(MI.AGE$statistic)
+MI.AGE$p.value   <- as.numeric(MI.AGE$p.value)
+MI.AGE$conf.low  <- as.numeric(MI.AGE$conf.low)
+MI.AGE$conf.high <- as.numeric(MI.AGE$conf.high)
+MI.AGE[,-c(1:4)] <- round(MI.AGE[, -c(1:4)],2)
+
+kable(MI.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+MI.AGE %>%
+write_csv(file = "results/sccs_coef_POS_MI_by_age.csv")
+```
+
+# Ischeamic Stroke
+  EVENT_CAT = 'Ischeamic Stroke' 
+
+ 
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Ischeamic Stroke' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Ischeamic Stroke' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Ischeamic Stroke")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Ischeamic Stroke") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+ST<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+ST$estimate  <- as.numeric(ST$estimate)
+ST$std.error <- as.numeric(ST$std.error)
+ST$statistic <- as.numeric(ST$statistic)
+ST$p.value   <- as.numeric(ST$p.value)
+ST$conf.low  <- as.numeric(ST$conf.low)
+ST$conf.high <- as.numeric(ST$conf.high)
+ST[,-c(1:3)] <- round(ST[, -c(1:3)],2)
+
+
+kable(ST, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ST %>%
+write_csv(file = "results/sccs_coef_pos_ST.csv")
+################################################################
+#model by By WIMD 2019 quintile
+################################################################
+events<-sqlQuery(sql,"
+SELECT DISTINCT VACC_TYPE , EXPGR ,WIMD_2019_QUINTILE ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Ischeamic Stroke'		
+		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , WIMD_2019_QUINTILE ,EXPGR;")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+bywimd <- clogit(event ~ vt_wimd + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZW<-tidy(bywimd, conf.int = TRUE, exponentiate=TRUE) %>% 
+          separate(term,c("vac","wimd_2019_quintile","term"),"/") %>% 
+          mutate(event="Ischeamic Stroke")
+   
+AZW <- AZW %>% 
+          select(term,wimd_2019_quintile,estimate,std.error,statistic,p.value,conf.low,conf.high)
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,WIMD_2019_QUINTILE,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","wimd_2019_quintile","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+CNT$wimd_2019_quintile <- as.character(CNT$wimd_2019_quintile)
+ST.W<-left_join(CNT,AZW, by=c('term','wimd_2019_quintile'))
+
+ST.W$estimate  <- as.numeric(ST.W$estimate)
+ST.W$std.error <- as.numeric(ST.W$std.error)
+ST.W$statistic <- as.numeric(ST.W$statistic)
+ST.W$p.value   <- as.numeric(ST.W$p.value)
+ST.W$conf.low  <- as.numeric(ST.W$conf.low)
+ST.W$conf.high <- as.numeric(ST.W$conf.high)
+ST.W[,-c(1:3)] <- round(ST.W[, -c(1:3)],2)
+
+kable(ST.W, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ST.W %>%
+write_csv(file = "results/sccs_coef_POS_ST_by_wimd2019.csv")
+
+
+################################################################
+#model by age
+################################################################
+#cat("By age band")
+events <-sqlQuery(sql,"SELECT DISTINCT VACC_TYPE , EXPGR ,age_band ,COUNT(DISTINCT ALF_E ) N
+FROM (
+		SELECT alf_e, AGE_BAND ,WIMD_2019_QUINTILE ,
+		TSTART ,
+		CASE 
+		WHEN event=0 THEN TSTOP 
+		WHEN event=1 THEN INCIDENT_SCCS_DT END AS tstop, 
+		EXPGR , VACC_TYPE , vt, event ,event_cat, INCIDENT_SCCS_DT 
+		FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST
+		WHERE EVENT_CAT = 'Ischeamic Stroke'		ORDER BY ALF_E , TSTART
+)
+GROUP BY VACC_TYPE , age_band ,EXPGR ")
+
+#a<-sccs %>% filter(vacc_type %in% c("PB","UV"))
+#az
+byage <- clogit(event ~ vt_age + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+AZAGE <- tidy(byage, conf.int = TRUE, exponentiate=TRUE )%>%
+          separate(term,c("vac","age-band","term"),"/") %>% 
+          mutate(event="Ischeamic Stroke")
+          
+AZAGE$vac <- AZAGE$vac %>% 
+            str_replace_all("vt_age", " ") %>% 
+            str_trim(side="both")
+         
+AZAGE <- AZAGE %>% 
+        select(event,term,`age-band`,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+##get the counts: AZ
+CNT<-events%>%
+    select(EXPGR,AGE_BAND,N)
+
+CNT$N[CNT$N <10] <- "<10"
+#harmonize col names
+colnames(CNT)<-c("term","age-band","N")
+#trim the excess
+CNT$term<-CNT$term%>%
+    str_trim(side="both")
+
+ST.AGE<-left_join(CNT,AZAGE, by=c('term','age-band'))
+
+ST.AGE$estimate  <- as.numeric(ST.AGE$estimate)
+ST.AGE$std.error <- as.numeric(ST.AGE$std.error)
+ST.AGE$statistic <- as.numeric(ST.AGE$statistic)
+ST.AGE$p.value   <- as.numeric(ST.AGE$p.value)
+ST.AGE$conf.low  <- as.numeric(ST.AGE$conf.low)
+ST.AGE$conf.high <- as.numeric(ST.AGE$conf.high)
+ST.AGE[,-c(1:4)] <- round(ST.AGE[, -c(1:4)],2)
+
+kable(ST.AGE, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ST.AGE %>%
+write_csv(file = "results/sccs_coef_POS_ST_by_age.csv")
+```
+
+# Positive control: Coeliac disease
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Coeliac disease' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Coeliac disease' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Coeliac disease")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Coeliac disease") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+COEL<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+COEL$estimate  <- as.numeric(COEL$estimate)
+COEL$std.error <- as.numeric(COEL$std.error)
+COEL$statistic <- as.numeric(COEL$statistic)
+COEL$p.value   <- as.numeric(COEL$p.value)
+COEL$conf.low  <- as.numeric(COEL$conf.low)
+COEL$conf.high <- as.numeric(COEL$conf.high)
+COEL[,-c(1:3)] <- round(COEL[, -c(1:3)],2)
+
+
+kable(COEL, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+COEL %>%
+write_csv(file = "results/sccs_coef_pos_coeliac.csv")
+
+```
+
+# Positive control: anaphylactic
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Anaphylactic shock' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Anaphylactic shock' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Anaphylactic shock")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Anaphylactic shock") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+ANAPH<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+ANAPH$estimate  <- as.numeric(ANAPH$estimate)
+ANAPH$std.error <- as.numeric(ANAPH$std.error)
+ANAPH$statistic <- as.numeric(ANAPH$statistic)
+ANAPH$p.value   <- as.numeric(ANAPH$p.value)
+ANAPH$conf.low  <- as.numeric(ANAPH$conf.low)
+ANAPH$conf.high <- as.numeric(ANAPH$conf.high)
+ANAPH[,-c(1:3)] <- round(ANAPH[, -c(1:3)],2)
+
+
+kable(ANAPH, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ANAPH %>%
+write_csv(file = "results/sccs_coef_pos_anaphylactic.csv")
+
+```
+
+
+# Positive control: hip fracture
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'hip fracture' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Hip fracture' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Hip fracture")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Hipfract") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+ANAPH<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+ANAPH$estimate  <- as.numeric(ANAPH$estimate)
+ANAPH$std.error <- as.numeric(ANAPH$std.error)
+ANAPH$statistic <- as.numeric(ANAPH$statistic)
+ANAPH$p.value   <- as.numeric(ANAPH$p.value)
+ANAPH$conf.low  <- as.numeric(ANAPH$conf.low)
+ANAPH$conf.high <- as.numeric(ANAPH$conf.high)
+ANAPH[,-c(1:3)] <- round(ANAPH[, -c(1:3)],2)
+
+
+kable(ANAPH, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ANAPH %>%
+write_csv(file = "results/sccs_coef_pos_hipfract.csv")
+
+```
+
+
+# Positive control: Appendicitis
+
+```{r , eval=TRUE, echo=FALSE}
+###############################
+events <- sqlQuery(sql,"SELECT DISTINCT expgr, COUNT(DISTINCT ALF_E ) N, 'Appendicitis' AS event_type
+FROM (
+	SELECT * FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST 
+	WHERE 
+	alf_e IN (SELECT DISTINCT ALF_E FROM sailw0911v.VAC17_ANALYSIS_SCCS_TEST WHERE EVENT_CAT = 'Appendicitis' AND event=1)
+	ORDER BY ALF_E , TSTART 
+	)
+WHERE EVENT =1 AND EXPGR IS NOT NULL AND VACC_TYPE IS NOT NULL  
+GROUP BY  EXPGR
+ORDER BY expgr; 
+");
+
+
+alf <- data.frame(sccs %>% 
+                  filter(event_cat == "Appendicitis")%>%
+				  select(alf_e)
+                  )
+
+sub.sccs <- sccs %>% filter(alf_e %in% c(alf$alf_e))
+
+################################################################
+#model 
+################################################################
+pb<- clogit(event ~ expgr + strata(alf_e) + offset(log(intervals)), data=sub.sccs)
+pb <- tidy(pb, conf.int=TRUE, exponentiate=TRUE)
+
+#trim the excess
+pb$term<-pb$term%>%
+  str_replace_all("expgr"," ")%>%
+  str_trim(side="both")
+
+base<-data.frame(
+  term= "PRE_TEST_CONTROL",
+  estimate= 1, 
+  std.error= "na", 
+  statistic= "na",
+  p.value= "na",
+  conf.low= "na",
+  conf.high="na"
+)
+
+new <- rbind(pb,base)
+#all numberci columns and rounding to 2 decimals
+new$estimate  <- as.numeric(new$estimate)
+new$std.error <- as.numeric(new$std.error)
+new$statistic <- as.numeric(new$statistic)
+new$p.value   <- as.numeric(new$p.value)
+new$conf.low  <- as.numeric(new$conf.low)
+new$conf.high <- as.numeric(new$conf.high)
+new[,-1] <- round(new[, -1],2)
+
+CNT <- events%>%
+  mutate( EVENT="Appendicitis") %>% 
+  select(EXPGR,N,EVENT)
+#harmonize col names
+colnames(CNT)<-c("term","N","event")
+
+CNT$N <- as.integer(CNT$N)
+CNT$N[CNT$N < 10] <- "<10"
+#trim the excess
+CNT$term<-CNT$term%>%
+  str_trim(side="both")
+
+
+ANAPH<-left_join(CNT,new,by='term')%>%
+  select(event,term,N,estimate,std.error,statistic,p.value,conf.low,conf.high)
+
+
+ANAPH$estimate  <- as.numeric(ANAPH$estimate)
+ANAPH$std.error <- as.numeric(ANAPH$std.error)
+ANAPH$statistic <- as.numeric(ANAPH$statistic)
+ANAPH$p.value   <- as.numeric(ANAPH$p.value)
+ANAPH$conf.low  <- as.numeric(ANAPH$conf.low)
+ANAPH$conf.high <- as.numeric(ANAPH$conf.high)
+ANAPH[,-c(1:3)] <- round(ANAPH[, -c(1:3)],2)
+
+
+kable(ANAPH, align = "ll")%>%
+  kable_paper("hover", full_width=F)
+
+ANAPH %>%
+write_csv(file = "results/sccs_coef_pos_append.csv")
+
+```

@@ -1,0 +1,590 @@
+---
+title: "Self-controlled case series analysis"
+author: '[Fatemeh Torabi](mailto:fatemeh.torabi@swansea.ac.uk)'
+date: "Last edited `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '2'
+    code_folding: hide
+  word_document:
+    toc: yes
+    toc_depth: '2'
+toc-title: Contents
+always_allow_html: yes
+header-includes: null
+---
+
+```{r global_options, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(fig.path = 'figures/', fig.align = 'center', echo = FALSE, warning = FALSE, message = FALSE)
+
+pkgs <- c(
+    "assertr",
+    "beepr",
+    "broom",
+    "dplyr",
+    "data.table",
+    "dtplyr",
+    "forcats",
+    "ggplot2",
+    "ggthemes",
+    "knitr",
+    "kableExtra",
+    "mice",
+    "janitor",
+    "lubridate",
+    "qs",
+    "rmarkdown",
+    "sailr",
+    "scales",
+    "stringr",
+    "readr",
+    "survival",
+    "tableone",
+    "tidyr",
+    "RODBC",
+    "Cairo",
+    "lattice",
+    "getopt"
+)
+
+for (pkg in pkgs) {
+    suppressWarnings(
+        suppressPackageStartupMessages(
+            library(pkg, character.only = TRUE)
+        )
+    )
+    message("\t", pkg, sep = "")
+}
+```
+
+```{r "loginSctn", eval=TRUE, echo = FALSE }
+setwd("P:/torabif/workspace/vac17-vaccine-safety-clotting-wales")
+source("S:/0911 - Utilising routine data and machine learning techniques to discover new multi/FT/R_login/login_box.r");
+login = getLogin('torabif');
+sql = odbcConnect('PR_SAIL',login[1],login[2]);
+login = 0
+```
+<!-------------------------------------------------------------------------------------------->
+\newpage
+\tableofcontents
+\newpage
+
+## Vaccine summary
+```{r , eval=TRUE, echo=FALSE}
+vacc <- sqlQuery(sql,"SELECT * FROM (
+----------------------------------
+---routine scenario: BOTH + BOOSTER
+-----------------------------------	
+SELECT 
+	'1' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NOT NULL 
+		AND 
+		 VACC_SECOND_DATE IS NOT NULL 
+		AND 
+		VACC_third_DATE  IS NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NOT NULL
+	) AS VACC_COUNT, 
+	'D1 + D2 + Booster' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+UNION 				
+----------------------------------
+---had everything : 3 dose & booster
+-----------------------------------	
+SELECT 
+	'2' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NOT NULL 
+		AND 
+		 VACC_SECOND_DATE IS NOT NULL 
+		AND 
+		VACC_third_DATE  IS NOT NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NOT NULL
+	) AS VACC_COUNT, 
+	'D1 + D2 + D3 + Booster' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+UNION 
+
+----------------------------------
+---THREE DOSE ONLY not booster
+-----------------------------------	
+SELECT 
+	'3' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NOT NULL 
+		AND 
+		 VACC_SECOND_DATE IS NOT NULL 
+		AND 
+		VACC_third_DATE  IS NOT NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NULL
+	) AS VACC_COUNT, 
+	'D1 + D2 + D3' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+UNION 
+----------------------------------
+---DOSE 1 & 2 ONLY 
+----------------------------------	
+SELECT 
+	'4' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NOT NULL 
+		AND 
+		 VACC_SECOND_DATE IS NOT NULL 
+		AND 
+		VACC_third_DATE  IS NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NULL
+	) AS VACC_COUNT, 
+	'D1 + D2 ' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+
+UNION 
+----------------------------------
+---DOSE 1 ONLY 
+----------------------------------	
+SELECT 
+	'5' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NOT NULL 
+		AND 
+		 VACC_SECOND_DATE IS NULL 
+		AND 
+		VACC_third_DATE  IS NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NULL
+	) AS VACC_COUNT, 
+	'D1' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+
+UNION 
+----------------------------------
+---DOSE 1 ONLY 
+----------------------------------	
+SELECT 
+	'6' AS NUM, 
+	count(DISTINCT ALF_E ) CASE_COUNT, 
+	SUM(
+		 VACC_FIRST_DATE  IS NULL 
+		AND 
+		 VACC_SECOND_DATE IS NULL 
+		AND 
+		VACC_third_DATE  IS NULL
+		AND 
+		VACC_BOOSTER_DATE  IS  NULL
+	) AS VACC_COUNT, 
+	'UV' AS vaccine_status
+	FROM
+			sailw0911v.vac17_COHORT 
+	WHERE
+			is_sample = 1
+			AND 
+			incident_dt IS NOT NULL 
+			AND 		
+INCIDENT_CAT IN 
+				(
+				'Arterial Thrombosis',
+				'Hemorrhagic events',
+				'Idiopathic thrombocytopenic purpura',
+				'Ischeamic Stroke',
+				'Myocardial Infarction',
+				'Thrombocytopenia (excluding ITP)',
+				'Venous thromboembolic events (excluding CSVT)'
+				)
+
+) ORDER BY NUM;")
+
+
+kable(vacc)
+
+vacc %>% 
+  write_csv(file = "results/summary.VAC.csv")
+```
+## Table 1 summary of cohort
+
+
+```{r , eval=TRUE, echo=FALSE}
+library("gtsummary")
+#bmi and qc score are processed in this table:
+#d_analysis <- qread("data/d2_analysis_clean.qs")
+#names(d_analysis) <- toupper(names(d_analysis))
+
+cohort <- sqlQuery(sql,"
+SELECT 
+	DISTINCT ALF_E ,
+	CASE 
+	WHEN HAS_POSITIVE_TEST =1 THEN 'YES'
+	WHEN HAS_POSITIVE_TEST =0 THEN 'NO'
+	END AS HAS_POSITIVE_TEST
+	,
+	INCIDENT_CAT ,
+	CASE 
+	WHEN c20_gndr_cd=1 THEN 'male'
+	WHEN c20_gndr_cd=2 THEN 'female'
+	END AS gndr_cd,
+	CASE 
+	WHEN age BETWEEN 16 AND 29 THEN '16-29'
+	WHEN age BETWEEN 30 AND 39 THEN '30-39'
+	WHEN age BETWEEN 40 AND 49 THEN '40-49'
+	WHEN age BETWEEN 50 AND 59 THEN '50-59'
+	WHEN age BETWEEN 60 AND 69 THEN '60-69'
+	WHEN age BETWEEN 70 AND 79 THEN '70-79'
+	WHEN age BETWEEN 80 AND 89 THEN '80-89'
+	WHEN age >= 90 THEN '90+'
+	END AS age_band,
+	wimd_2019_quintile,
+	CASE 
+	WHEN prior_testing_n =0 THEN '0'
+	WHEN prior_testing_n =1 THEN '1'
+	WHEN prior_testing_n BETWEEN 2 AND 4 THEN '2-4'	
+	WHEN prior_testing_n BETWEEN 5 AND 9 THEN '5-9'	
+	WHEN prior_testing_n >= 10 THEN '10+'	
+	END AS Prior_number_of_tests,
+	CASE 
+	WHEN VACC_FIRST_NAME = 'Astrazeneca' 				THEN 'AZ'
+	WHEN VACC_FIRST_NAME = 'Pfizer Biontech' 			THEN 'PB'
+	WHEN VACC_FIRST_NAME IN ('Moderna', 'Moderna half') THEN 'MD'
+	ELSE 'UV'
+	END AS VACC_FIRST_NAME, 
+	CASE 
+	WHEN VACC_SECONd_NAME = 'Astrazeneca' 				THEN 'AZ'
+	WHEN VACC_SECONd_NAME = 'Pfizer Biontech' 			THEN 'PB'
+	WHEN VACC_SECONd_NAME IN ('Moderna', 'Moderna half')THEN 'MD'
+	ELSE 'UV'
+	END AS VACC_SECONd_NAME,
+	CASE 
+	WHEN VACC_third_NAME = 'Astrazeneca' 				THEN 'AZ'
+	WHEN VACC_third_NAME = 'Pfizer Biontech' 			THEN 'PB'
+	WHEN VACC_third_NAME IN ('Moderna', 'Moderna half') THEN 'MD'
+	ELSE 'UV'
+	END AS VACC_third_NAME ,
+	CASE 
+	WHEN VACC_booster_NAME = 'Astrazeneca' 				THEN 'AZ'
+	WHEN VACC_booster_NAME = 'Pfizer Biontech' 		THEN 'PB'
+	WHEN VACC_booster_NAME = 'Moderna' 					  THEN 'MD & HalfMD'
+	WHEN VACC_BOOSTER_NAME = 'Moderna half'				THEN 'MD & HalfMD'
+	ELSE 'UV'
+	END AS VACC_booster_NAME,
+	CASE WHEN VACC_FIRST_DATE 	IS NOT NULL THEN 1 ELSE 0 END AS D1,
+	CASE WHEN VACC_SECOND_DATE 	IS NOT NULL THEN 1 ELSE 0 END AS D2,
+	CASE WHEN VACC_third_DATE 	IS NOT NULL THEN 1 ELSE 0 END AS D3,
+	CASE WHEN VACC_BOOSTER_DATE IS NOT NULL THEN 1 ELSE 0 END AS Booster
+FROM 
+sailw0911v.VAC17_COHORT 
+WHERE 
+IS_SAMPLE =1 
+AND 
+INCIDENT_DT IS NOT NULL 
+and 
+INCIDENT_CAT IN 
+(
+'Arterial Thrombosis',
+--'CSVT',
+'Hemorrhagic events',
+'Idiopathic thrombocytopenic purpura',
+'Ischeamic Stroke',
+'Myocardial Infarction',
+'Thrombocytopenia (excluding ITP)',
+'Venous thromboembolic events (excluding CSVT)'
+)
+")
+
+#using gtsummary
+library(gtsummary)
+
+TEST <- cohort%>%
+        dplyr::select(INCIDENT_CAT,
+                      GNDR_CD,AGE_BAND,
+                      WIMD_2019_QUINTILE,
+                      PRIOR_NUMBER_OF_TESTS, 
+#QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT,   
+                      HAS_POSITIVE_TEST )
+        
+
+TEST<-
+tbl_summary(TEST, 
+            by= HAS_POSITIVE_TEST,
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+BOOSTER<-cohort%>%
+#  filter(VACC_SECOND_NAME=="UV" & (VACC_FIRST_NAME=="AZ" | VACC_FIRST_NAME =="PB"))
+     filter(D1==1 , D2==1, # D3==0 , all boosted are characterized
+            BOOSTER==1) %>% 
+dplyr::select(INCIDENT_CAT, GNDR_CD, AGE_BAND, WIMD_2019_QUINTILE, PRIOR_NUMBER_OF_TESTS, #QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT, 
+       VACC_BOOSTER_NAME )
+
+BOOSTER<-
+tbl_summary(BOOSTER, 
+            by= VACC_BOOSTER_NAME,
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+
+D1.D2.D3<-cohort%>%
+       filter(D1==1 , D2==1, D3==1 , BOOSTER==0) %>% 
+select(INCIDENT_CAT, GNDR_CD, AGE_BAND, WIMD_2019_QUINTILE, PRIOR_NUMBER_OF_TESTS, #QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT, 
+       VACC_THIRD_NAME )
+
+D1.D2.D3<-tbl_summary(D1.D2.D3, 
+            by= VACC_THIRD_NAME,
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+
+#TWO DOSE ONLY:
+D1.D2<-cohort%>%
+       filter(D1==1 , D2==1, D3==0 , BOOSTER==0) %>% 
+select(INCIDENT_CAT, GNDR_CD, AGE_BAND, WIMD_2019_QUINTILE, PRIOR_NUMBER_OF_TESTS, #QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT, 
+       VACC_SECOND_NAME )
+
+D1.D2<-tbl_summary(D1.D2, 
+            by= VACC_SECOND_NAME,
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+
+#ONE DOSE ONLY:
+D1<-cohort%>%
+       filter(D1==1 , D2==0, D3==0 , BOOSTER==0) %>% 
+select(INCIDENT_CAT, GNDR_CD, AGE_BAND, WIMD_2019_QUINTILE, PRIOR_NUMBER_OF_TESTS, #QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT, 
+       VACC_FIRST_NAME )
+
+D1<-tbl_summary(D1, 
+            by= VACC_FIRST_NAME,
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+
+#UNVACCINATED
+UV<-cohort%>%
+       filter(D1==0 , D2==0, D3==0 , BOOSTER==0) %>% 
+select(INCIDENT_CAT, GNDR_CD, AGE_BAND, WIMD_2019_QUINTILE, PRIOR_NUMBER_OF_TESTS#, QC_SUM_SCORE_CAT,QC_BMI_CAT,SMOKING_CAT, HYPERTENSION_CAT, 
+        )
+
+UV<-tbl_summary(UV, 
+            missing = "no")%>%
+  add_n()%>%
+#  add_p()%>%
+  modify_header(label="Characteristics")%>%
+  bold_labels()
+
+```
+
+
+### summary by positive test: 
+
+```{r , eval=TRUE, echo=FALSE}
+TEST <- as_tibble(TEST)
+#names(TAB1) <- c("Characteristics", "N","NO", "YES")
+
+TEST %>% 
+  write_csv(file = "results/TAB1.POS.TEST.csv")
+TEST
+```
+
+### summary by BOOSTER: 
+
+```{r , eval=TRUE, echo=FALSE}
+BOOSTER <- as_tibble(BOOSTER)
+BOOSTER
+BOOSTER %>% 
+  write_csv(file = "results/TAB1.BOOSTER.VAC.csv")
+
+```
+
+### summary by D1D2D3: 
+
+```{r , eval=TRUE, echo=FALSE}
+D1.D2.D3 <- as_tibble(D1.D2.D3)
+D1.D2.D3
+D1.D2.D3 %>% 
+  write_csv(file = "results/TAB1.D1.D2.D3.VAC.csv")
+
+```
+
+
+### summary by D1D2: 
+
+```{r , eval=TRUE, echo=FALSE}
+D1.D2 <- as_tibble(D1.D2)
+D1.D2
+D1.D2 %>% 
+  write_csv(file = "results/TAB1.D1.D2.VAC.csv")
+
+```
+
+### summary by D1: 
+
+```{r , eval=TRUE, echo=FALSE}
+D1 <- as_tibble(D1)
+D1
+D1 %>% 
+  write_csv(file = "results/TAB1.D1.VAC.csv")
+
+```
+
+
+### summary of UNVACCINATED: 
+
+```{r , eval=TRUE, echo=FALSE}
+UV <- as_tibble(UV)
+UV
+UV %>% 
+  write_csv(file = "results/TAB1.UV.VAC.csv")
+
+```
+
+
+# another way to TableOne
+```{r, eval=TRUE, echo=FALSE}
+#anothe approach in creating table one that I didn't use in this
+#using tableone package
+xvar<-c("
+      INCIDENT_CAT", 
+      "GNDR_CD", 
+      "AGE_BAND", 
+      "WIMD_2019_QUINTILE",
+      "PRIOR_NUMBER_OF_TESTS"#,
+  #    "QC_SUM_SCORE_CAT"#,
+  #    "QC_BMI_CAT",
+  #    "SMOKING_CAT", 
+  #    "HYPERTENSION_CAT"
+  )
+TAB1 <-
+    cohort%>%
+    select(
+      INCIDENT_CAT, 
+      GNDR_CD, 
+      AGE_BAND, 
+      WIMD_2019_QUINTILE,
+      PRIOR_NUMBER_OF_TESTS,
+#      QC_SUM_SCORE_CAT,
+#     QC_BMI_CAT,
+#     SMOKING_CAT, 
+#     HYPERTENSION_CAT, 
+      HAS_POSITIVE_TEST )%>%
+      mutate(
+        HAS_POSITIVE_TEST = fct_recode(HAS_POSITIVE_TEST,
+            "YES" = "positive test: yes"
+        )#,
+      #  QC_BMI_CAT = fct_relevel(QC_BMI_CAT,
+      #     "15.0--18.4",
+      #      "18.5--24.9",
+      #      "25.0--29.9",
+      #      "30.0--39.9",
+      #      "40.0--46.9"
+      #  )
+    ) %>%
+    CreateTableOne(
+        vars = xvar,
+        data = .,
+        strata = "HAS_POSITIVE_TEST",
+        test = FALSE
+    )
+```
