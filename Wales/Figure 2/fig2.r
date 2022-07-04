@@ -6,11 +6,11 @@ library(ggplot2)
 library(stringr)
 library(patchwork)
 library(scales)
+library(ggthemr)
 library(ggh4x)
 library(forcats)
 library(janitor)
 library(readr)
-library(ggthemr)
 
 d_coef_vacc <-
   read_csv("Table2-vacc.csv") %>%
@@ -155,7 +155,7 @@ p_coef <-
       "(d) BNT162b2\nsecond dose"   = "BNT162b2 Second",
       "(e) BNT162b2\nbooster dose"  = "BNT162b2 Booster",
       "(f) mRNA-1273\nbooster dose" = "mRNA-1273 Booster",
-      "(g) COVID-19\ninfection"     = "C19 infection Test"
+      "(g) SARS-CoV-2\ninfection"     = "C19 infection Test"
     ),
     strata = factor(as.character(strata)),
     event = factor(event, lkp_event2, names(lkp_event2))
@@ -191,12 +191,16 @@ p_coef <-
     panel.grid.major.x = element_blank()
   )
 
-p_coef
+p_coef<-
+p_coef+ 
+ggthemes::theme_pander()
+
+print(p_coef)
 
 ggsave(
   p_coef,
   file = "fig2-sccs-coef-all.png",
-  width = 6,
-  height = 7,
+  width = 7,
+  height = 9,
   dpi = 600
 )
