@@ -2,7 +2,7 @@
 
 This repository holds code and analysis pipeline generated for Wales vaccine safety analysis conducted as part of the DaCVaP collaboration funded by HDRUK. 
 Access the scientific article [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9524320/#MOESM1)
-Access the supplementary materials including clinical codes from [here](file:///C:/Users/Fatemah.torabi/Downloads/41598_2022_20118_MOESM1_ESM.pdf)
+Access the supplementary materials including clinical codes from [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9524320/bin/41598_2022_20118_MOESM1_ESM.pdf)
 
 ## Project Details and approvals
 
