@@ -1,4 +1,4 @@
-# [Risk of thrombocytopenic, haemorrhagic and thromboembolic disorders following COVID-19 vaccination and positive test: a self-controlled case series analysis in Wales](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9524320/#Abs1title)
+# [Risk of thrombocytopenic, haemorrhagic and thromboembolic disorders following COVID-19 vaccination and positive test: a self-controlled case series analysis in Wales](https://www.nature.com/articles/s41598-022-20118-6)
 
 This repository holds code and analysis pipeline generated for Wales vaccine safety analysis conducted as part of the DaCVaP collaboration funded by HDRUK. 
 Access the scientific article [here](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9524320/#MOESM1)
