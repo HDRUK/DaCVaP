@@ -12,6 +12,7 @@
 library(tidyverse)
 library(mgcv)
 library(lubridate)
+library(survival)
 
 # Server location
 Location <- "/conf/"  # Server
@@ -20,7 +21,7 @@ Location <- "/conf/"  # Server
 a_begin <- as.Date("2020-12-08")
 
 # Cohort end date - 30th June 2021 (to keep consistent across the UK nations)
-a_end <- as.Date("2021-04-14")
+a_end <- as.Date("2021-06-30")
 
 ##### 1 - Baseline characteristic data (df_cohort)  ####
 
@@ -72,7 +73,7 @@ prev_tests  <- readRDS(paste0(Location,"EAVE/GPanalysis/data/Tests.rds")) %>%
 # Remove duplicates - take the row with the highest number of tests
 prev_tests <- prev_tests %>%
   group_by(EAVE_LINKNO) %>%
-  dplyr::summarise(n_tests = max(n_tests)) %>%
+  summarise(n_tests = max(n_tests)) %>% 
   mutate(n_tests = if_else(is.na(n_tests),0L,n_tests) )
 
 
@@ -81,7 +82,7 @@ prev_tests <- prev_tests %>%
 pos_tests <- readRDS(paste0(Location,"EAVE/GPanalysis/data/Positive_Tests.rds")) %>%
   group_by(EAVE_LINKNO) %>%
   # Take minimum specimen date if multiple
-  dplyr::summarise(specimen_date = min(specimen_date)) %>%
+  summarise(specimen_date = min(specimen_date)) %>%
   # Calculate days from start date to specimen date
   mutate(days = as.numeric(specimen_date - a_begin)) %>%
   # Group days into categories
@@ -133,56 +134,11 @@ colnames(eave_rg_bpsmoke)
 colnames(qcovid_rg)
 
 
-#### 2 - Vaccine data (df_vaccinations) ####
-# Inital load
-Vaccinations  <- readRDS(paste0(Location,"EAVE/GPanalysis/data/cleaned_data/C19vaccine.rds")) %>% 
-  mutate(Date = as.Date(occurrence_time)) %>% 
-  mutate(vacc_type = case_when(grepl("COURAGEOUS", type) ~ "PB",
-                               grepl("TALENT", type) ~ "AZ",
-                               type == "39114911000001105" ~ "AZ",
-                               type == "39115611000001103" ~ "PB",
-                               #type == "39115611000001105" ~ "PB",
-                               TRUE ~ "UNK"), 
-         dose_number = if_else(stage %in% c(0,3), 1L, stage))
+ #### 2 - Vaccine data (df_vaccinations) ####
 
-# 1st dose
-Vaccinations1 <- filter(Vaccinations, dose_number==1) %>% 
-  dplyr::select(EAVE_LINKNO, Date, vacc_type, dose_number) %>% 
-  arrange(EAVE_LINKNO, Date) %>% 
-  filter(!duplicated(EAVE_LINKNO))
+source('/conf/EAVE/GPanalysis/progs/SRK/00_Read_GP_Vaccinations.R')
 
-# 2nd dose
-Vaccinations2 <- filter(Vaccinations, dose_number==2) %>% 
-  dplyr::select(EAVE_LINKNO, Date, vacc_type, dose_number) %>% 
-  arrange(EAVE_LINKNO, Date) %>% 
-  filter(!duplicated(EAVE_LINKNO))
-
-# Join 1st and 2nd dose as separate columns
-df_vaccinations <- left_join(Vaccinations1,Vaccinations2, by="EAVE_LINKNO") %>% 
-  mutate(date_vacc_1 = as.Date(Date.x), 
-         date_vacc_2 = as.Date(Date.y) ) %>% 
-  dplyr::rename(vacc_type=vacc_type.x,
-                vacc_type_2=vacc_type.y) %>% 
-  dplyr::select(-dose_number.x, -dose_number.y, -Date.x, -Date.y) %>%
-  #omit inconsistent records
-  filter(vacc_type %in% c("AZ","PB")) %>% 
-  filter(vacc_type_2 %in% c("AZ","PB") | is.na(vacc_type_2)) %>% 
-  filter( !(!is.na(vacc_type_2) & (vacc_type_2 != vacc_type))) %>%
-  #Get week of vaccination
-  mutate(week_start_vacc1 = floor_date(date_vacc_1, unit = "week", 
-                                       week_start = 1)) %>%
-  mutate(week_start_vacc2 = floor_date(date_vacc_2, unit = "week", 
-                                       week_start = 1)) %>%
-  # Fix any 2nd dose vaccinations that occurred on the same day as first
-  mutate(vacc_type_2 = if_else(!is.na(date_vacc_2) & (date_vacc_2 == date_vacc_1), NA_character_, vacc_type_2 ) ) %>% 
-  mutate(date_vacc_2 = as.Date(ifelse(!is.na(date_vacc_2) & (date_vacc_2 == date_vacc_1), NA, date_vacc_2 ), origin=as.Date("1970-01-01")) ) %>%
-  # Omit records with 2nd dose too close to 1st
-  filter(is.na(date_vacc_2) | !is.na(date_vacc_2)&(date_vacc_2 > date_vacc_1 + 18)) %>%
-  # Omit 1st dose records before 8th December 2020
-  filter(date_vacc_1 >= a_begin)
-
-
-
+df_vaccinations <- Vaccinations
 
 ##### 3 - Key outcomes data #####
 # All dates of events will be named admission_date i.e.
@@ -240,7 +196,6 @@ covid_hosp_death <- covid_death %>%
                                 "death")) %>%
   mutate(outcome_date = if_else(is.na(hosp_admission_date), "death",
                                 "hosp"))
-
 
 
 ## COVID-19 positive test
@@ -329,14 +284,14 @@ nrow(df_cohort) == length(unique(df_cohort$EAVE_LINKNO))
 
 ##### 7 - Save to data folder ####
 # Save df_cohort
-saveRDS(df_cohort, paste0("./data/df_cohort.rds"))
+#saveRDS(df_cohort, paste0("./data/df_cohort.rds"))
 
 # Save df_vaccinations
-saveRDS(df_vaccinations, paste0("./data/df_vaccinations.rds"))
+#saveRDS(df_vaccinations, paste0("./data/df_vaccinations.rds"))
 
 
 
 ##### 8- Remove files no longer needed ####
 rm(EAVE_cohort, eave_rg_bpsmoke, EAVE_Weights, pos_tests, prev_tests, datazones,
-   qcovid_rg, Vaccinations1, Vaccinations2,Vaccinations, z, z_ids, z_N, z_k, z_m)
+   qcovid_rg, Vaccinations, z, z_ids, z_N, z_k, z_m)
 
