@@ -1,0 +1,3 @@
+[submodule "Scotland/Covid-vaccine-waning-pooled"]
+	path = Scotland/Covid-vaccine-waning-pooled
+	url = https://github.com/EAVE-II/Covid-vaccine-waning-pooled
