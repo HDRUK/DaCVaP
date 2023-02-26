@@ -6,10 +6,9 @@ Further information on DaC-VaP and DaC-VaP-2 can be found here:
 
 DaC-VaP: https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap
 
-DaC-VaP2: https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap-2
 
-
-## Project outputs
+## DaC-VaP2 Project outputs
+https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap-2:
 
 * Pregnancy
 * Children and Young People
