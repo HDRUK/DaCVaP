@@ -4,3 +4,6 @@
 [submodule "Scotland/Covid-vaccine-safety-MA"]
 	path = Scotland/Covid-vaccine-safety-MA
 	url = https://github.com/EAVE-II/Covid-vaccine-safety-MA
+[submodule "DaCVaP2/Variants/National-Analyses/Scotland/B.1.1.529-variant"]
+	path = DaCVaP2/Variants/National-Analyses/Scotland/B.1.1.529-variant
+	url = https://github.com/EAVE-II/B.1.1.529-variant
