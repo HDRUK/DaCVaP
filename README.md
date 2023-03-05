@@ -9,11 +9,5 @@ Building upon this work, the DaC-VaP-2 project (November 2021 – January 2023) 
 
 DaC-VaP: https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap
 
+DaC-VaP 2: https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap-2
 
-## DaC-VaP2 Project outputs
-https://www.ed.ac.uk/usher/eave-ii/connected-projects/dac-vap-2:
-
-* Pregnancy
-* Children and Young People
-* Variants
-* Influenza and COVID vaccines
