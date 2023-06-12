@@ -1,3 +1,3 @@
 # Pooled Analysis
 
-The outputs from the national level analyses were pooled and subjected to the meta-analysis in this repo.
+The derived aggregate data from each nation (reported as adjusted log hazard ratios (aHR) and corresponding standard errors) were exported from the respective TREs and meta-analysed in a two-stage individual participant data random effects meta-analysis. Effect estimates were presented as hazard ratios and corresponding 95% confidence intervals. Restricted maximum likelihood estimation was used to estimate the pooled coefficients. Heterogeneity between the estimated effects between the nations were quantified using the between-study standard deviation. Tau-squared was used to assess the proportion of total variability owing to between-study heterogeneity.
