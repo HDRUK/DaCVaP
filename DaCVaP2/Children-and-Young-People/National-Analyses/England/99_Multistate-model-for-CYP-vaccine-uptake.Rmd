@@ -1,0 +1,196 @@
+---
+title: "Multistate model results for CYP vaccine uptake in Wales"
+author: "Utkarsh"
+date: '2022-08-22'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+options(
+    knitr.kable.NA = ''
+)
+
+knitr::opts_chunk$set(
+    fig.width  = 6,
+    fig.height = 5,
+    fig.align = "center",
+    echo = FALSE,
+    message = FALSE,
+    warning = FALSE
+)
+
+```
+
+
+# 0. Message to reviewers
+
+This document summarises the results of a multi-state model performed on children and young people aged 5-17.
+The files generated contain a mixture of summary plots (this document) and statistical data (accompanying csv documents).
+No small numbers are present and so no censoring has been performed.
+
+# 1. Research aim
+
+Analyse uptake of first, second and third/booster doses of COVID-19 vaccines in children and young people aged 5-17 in England.
+
+
+# 2. Approach
+
+
+## Study design
+
+ - Statistical analysis of e-cohort of children and young people ages 5-17 alive and living in England from 4th August 2021 to 31st May 2022. Including a multi-state model and survival analysis.
+
+
+
+# 3. Analysis
+
+- Multistate model performed to investigate vaccine uptake for each dose of vaccine across 4 variables:
+ * Age
+ * Sex
+ * Household vaccination status
+ * Number of people in household
+
+
+## Fig 3.1 The multistate model
+
+<!-- ![](results/states.png) -->
+
+# 4. Results
+
+```{r}
+kv <- readRDS("results/key_values.rds")
+```
+
+A total of `r kv$n[3]` children and young people were included in the study. Of these individuals, `r kv$n[4]` received their first vaccine, `r kv$n[5]` had their second, and `r kv$n[6]` their third/booster dose. A total of `r kv$n[8]` CYP became infected during the study, and `r kv$n[7]` died.
+
+## Table 4.1 Cohort summary
+
+```{r}
+t_sum <- readRDS("results/t_sum.rds") %>% rename(Variable = type) %>%
+  kable(
+    format.args = list(big.mark = ",")
+    ) %>%
+  kable_styling(
+    bootstrap_options = "striped",
+    full_width = FALSE
+    )
+
+t_sum
+
+```
+
+## Figure 4.2: Summary of vaccine status at the end of the study period 
+
+```{r}
+readRDS("results/p_sum.rds")
+d_sum <- readRDS("results/d_sum.rds") %>% 
+  pivot_wider(names_from = status, values_from = n) %>%
+  kable(
+    format.args = list(big.mark = ",")
+    ) %>%
+  kable_styling(
+    bootstrap_options = "striped",
+    full_width = FALSE
+    )
+
+d_sum
+
+```
+
+## Table 4.3: Events summary
+
+Of the `r kv$n[3]` CYP included, `r kv$n[2]` began entered the study uninfected and eligible for a vaccine. `r kv$n[1]` CYP began the study within 28 days of infection, and so entered the model in the "infected" state.
+
+```{r}
+t_events <- readRDS("results/t_events.rds") %>%
+  pivot_wider(names_from = to, values_from = Freq) %>%
+  mutate(
+    unvacc = case_when(between(unvacc,1,9) ~ "<10", TRUE ~ as.character(unvacc)),
+    infection = case_when(between(infection,1,9) ~ "<10", TRUE ~ as.character(infection)),
+    dose_1 = case_when(between(dose_1,1,9) ~ "<10", TRUE ~ as.character(dose_1)),
+    dose_2 = case_when(between(dose_2,1,9) ~ "<10", TRUE ~ as.character(dose_2)),
+    dose_3 = case_when(between(dose_3,1,9) ~ "<10", TRUE ~ as.character(dose_3)),
+    death = case_when(between(death,1,9) ~ "<10", TRUE ~ as.character(death)),
+    `no event` = case_when(between(`no event`,1,9) ~ "<10", TRUE ~ as.character(`no event`)),
+    `total entering` = case_when(between(`total entering`,1,9) ~ "<10", TRUE ~ as.character(`total entering`))
+    ) %>%
+  rename(unvaccinated = unvacc, "dose 1" = dose_1, "dose 2" = dose_2, "dose 3" = dose_3)
+t_events %>% kable(
+    format.args = list(big.mark = ",")
+) %>%
+kable_styling(
+    bootstrap_options = "striped",
+    full_width = FALSE
+)
+```
+
+## Table 4.4: Multistate model output
+
+This table below displays the results for transitions 2,9 and 12 representing the transitions from eligible to the following dose.
+
+```{r}
+sum_c1 <- readRDS("results/t_sum_c1.rds")
+t <- sum_c1 %>% filter(transition %in% c("2","9","12")) %>%
+kable(
+    format.args = list(big.mark = ",")
+) %>%
+kable_styling(
+    bootstrap_options = "striped",
+    full_width = FALSE
+)
+t
+```
+
+
+## Figure 4.5: Cumulative hazard
+
+![](results/states.png)
+```{r}
+#pta <- readRDS("results/t_pta.rds")
+#plot(pta, ord = c(2,3,4,5,6,1) , lwd = 2, cex = 0.75)
+```
+
+
+## Figure 4.6: Cumulative incidence plots by sex
+
+
+```{r}
+readRDS("results/p_ch1.rds")
+```
+
+## Figure 4.7: Cumulative incidence plots by age group
+
+```{r}
+readRDS("results/p_ch2.rds")
+```
+
+
+## Figure 4.8: Cumulative incidence plots by household vaccination status
+
+```{r}
+readRDS("results/p_ch3.rds")
+```
+
+## Figure 4.9: Cumulative incidence plots by household n
+
+```{r}
+readRDS("results/p_ch4.rds")
+```
+
+```{r, include = FALSE}
+# ifelse(!dir.exists(file.path("request_out")), dir.create(file.path("request_out")),"request_out folder exists")
+ch1<-readRDS("results/t_ch1.rds")
+ch2<-readRDS("results/t_ch2.rds")
+ch3<-readRDS("results/t_ch3.rds")
+ch4<-readRDS("results/t_ch4.rds")
+t_pha<-readRDS("results/t_pha.rds")
+t_sum_c1<-readRDS("results/t_sum_c1.rds")
+write_csv(ch1,"request_out/cumulative_hazards_sex.csv")
+write_csv(ch2,"request_out/cumulative_hazards_age.csv")
+write_csv(ch3,"request_out/cumulative_hazards_hh_vacc.csv")
+write_csv(ch4,"request_out/cumulative_hazards_hh_n.csv")
+write_csv(t_pha, "request_out/cox_prop_hazard_test.csv")
+write_csv(t_sum_c1, "request_out/cox_model.csv")
+write_csv(t_events, "request_out/events.csv")
+```
