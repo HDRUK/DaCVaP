@@ -8,7 +8,7 @@ Access the supplementary materials including clinical codes from [here](https://
 
 This project was conducted in the Trusted Research Envirnment of Wales known as [SAIL Databank](https://www.saildatabank.com/) and been granted approval by Information Governance Panel Review (IGRP) under project number 0911.
 
-* [Find our study protocol](https://github.com/HDRUK/DaCVaP/blob/main/Wales/SAP/Workplan%20-%20Vaccine%20Safety.pdf)
+* [Find our study protocol](https://github.com/HDRUK/DaCVaP/tree/main/SAPs)
 * [Interested to replicate our figure](https://github.com/HDRUK/DaCVaP/tree/main/Wales/Figure%202)
 * [Interested in our data curation and cohort generation see 02a to 04c codes of analysis pipeline](https://github.com/HDRUK/DaCVaP/tree/main/Wales)
 * [Interested in pulling data out of database server and data cleaning stage](https://github.com/HDRUK/DaCVaP/blob/main/Wales/06b_tidy.r)
